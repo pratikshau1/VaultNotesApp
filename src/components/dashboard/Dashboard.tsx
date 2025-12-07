@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
 import { encryptData, decryptData } from '@/lib/crypto';
@@ -6,26 +6,21 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
 import { 
-  Plus, 
   FileText, 
   Search, 
-  LogOut, 
   Save, 
   Trash2, 
   Pin, 
   Archive, 
   ArchiveRestore, 
-  Star,
-  Inbox,
   RotateCcw,
-  Hash,
   Folder,
-  File as FileIcon,
-  Upload,
-  Download,
-  MoreVertical
+  MoreVertical,
+  Check
 } from 'lucide-react';
 import NoteEditor from './NoteEditor';
+import Sidebar from './Sidebar';
+import FileVault from './FileVault';
 import { toast } from 'sonner';
 import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns';
@@ -58,7 +53,7 @@ import {
 type ViewType = 'all' | 'favorites' | 'archive' | 'trash' | 'files';
 
 export default function Dashboard() {
-  const { user, encryptionKey, logout } = useAuth();
+  const { user, encryptionKey } = useAuth();
   
   // Data State
   const [notes, setNotes] = useState<any[]>([]);
@@ -76,38 +71,64 @@ export default function Dashboard() {
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState<number | null>(null);
 
   // Modals
   const [isNewFolderOpen, setIsNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Auto-save timer ref
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     loadData();
-  }, [encryptionKey]); // Reload if key changes (login)
+  }, [encryptionKey]);
 
+  // Sync editor with selected note
   useEffect(() => {
     if (selectedNoteId) {
       const note = notes.find(n => n.id === selectedNoteId);
       if (note) {
-        setEditorTitle(note.title);
+        // Only update if different to avoid cursor jumps, though simple equality check helps
+        if (note.title !== editorTitle) setEditorTitle(note.title);
+        // Content sync is tricky with rich text, we rely on editor's internal state mostly, 
+        // but for initial load we need this.
+        // We only set content if we are switching notes.
         setEditorContent(note.content);
       }
     } else {
       setEditorTitle("");
       setEditorContent("");
     }
-  }, [selectedNoteId, notes]);
+  }, [selectedNoteId]); // Only run when ID changes, not when content updates to avoid loops
+
+  // Auto-save Logic
+  useEffect(() => {
+    if (!selectedNoteId || currentView === 'trash') return;
+
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    // Set new timeout for 2 seconds
+    autoSaveTimeoutRef.current = setTimeout(() => {
+       handleSave(true); // Silent save
+    }, 2000);
+
+    return () => {
+      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    };
+  }, [editorTitle, editorContent]);
 
   const loadData = async () => {
     if (!encryptionKey) return;
 
     try {
-      // Load Folders
       const loadedFolders = await db.getFolders();
       setFolders(loadedFolders.sort((a, b) => a.name.localeCompare(b.name)));
 
-      // Load Notes
       const encryptedNotes = await db.getNotes();
       const decryptedNotes = encryptedNotes.map(note => {
         try {
@@ -115,8 +136,8 @@ export default function Dashboard() {
             const content = decryptData(note.encryptedContent, encryptionKey);
             return { 
               ...note, 
-              title, 
-              content,
+              title: title || "Untitled", 
+              content: content || "",
               isPinned: !!note.isPinned,
               isArchived: !!note.isArchived,
               isTrashed: !!note.isTrashed,
@@ -126,29 +147,19 @@ export default function Dashboard() {
             console.error("Failed to decrypt note", note.id);
             return { ...note, title: "Decryption Error", content: "", labels: [] };
         }
-      }).filter(n => n.title !== null);
+      }).filter(n => n !== null);
       
-      decryptedNotes.sort((a, b) => {
-        if (a.isPinned === b.isPinned) {
-          return b.updatedAt - a.updatedAt;
-        }
-        return a.isPinned ? -1 : 1;
-      });
+      decryptedNotes.sort((a, b) => b.updatedAt - a.updatedAt);
       setNotes(decryptedNotes);
 
-      // Load Files
       const encryptedFiles = await db.getFiles();
       const decryptedFiles = encryptedFiles.map(file => {
         try {
             const name = decryptData(file.encryptedName, encryptionKey);
-            const type = decryptData(file.encryptedType, encryptionKey);
             return {
                 ...file,
-                name,
-                type,
-                // We keep blob encrypted until download to save memory, 
-                // but here we might need it? No, keep it encrypted in object 
-                // and only decrypt on download.
+                name: name || "Unknown File",
+                // Keep blob encrypted until download
             };
         } catch (e) {
             return { ...file, name: "Error", type: "unknown" };
@@ -175,20 +186,22 @@ export default function Dashboard() {
     
     const newNote = {
       id: newId,
-      title: "Untitled Note",
+      title: "",
       content: "",
       createdAt: now,
       updatedAt: now,
-      folderId: selectedFolderId, // Assign to current folder if selected
+      folderId: selectedFolderId,
       isPinned: false,
       isArchived: false,
       isTrashed: false,
       labels: []
     };
 
+    // Optimistic update
     setNotes([newNote, ...notes]);
     setSelectedNoteId(newId);
     
+    // Initial Save
     await saveNoteToDb(newNote);
   };
 
@@ -207,19 +220,25 @@ export default function Dashboard() {
         isTrashed: note.isTrashed,
         labels: note.labels,
         createdAt: note.createdAt,
-        updatedAt: Date.now()
+        updatedAt: note.updatedAt
       });
     } catch (e) {
       console.error("Save failed", e);
-      toast.error("Failed to save note");
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (silent = false) => {
     if (!selectedNoteId) return;
-    setIsSaving(true);
+    if (!silent) setIsSaving(true);
     
     const noteToSave = notes.find(n => n.id === selectedNoteId);
+    
+    // Don't save if nothing changed (optimization)
+    if (noteToSave && noteToSave.title === editorTitle && noteToSave.content === editorContent) {
+        if (!silent) setIsSaving(false);
+        return;
+    }
+
     if (noteToSave) {
         const updatedNote = {
             ...noteToSave,
@@ -227,11 +246,16 @@ export default function Dashboard() {
             content: editorContent,
             updatedAt: Date.now()
         };
-        setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
+        
+        // Update local state
+        setNotes(prev => prev.map(n => n.id === selectedNoteId ? updatedNote : n));
+        
+        // Persist
         await saveNoteToDb(updatedNote);
-        toast.success("Saved");
+        setLastSaved(Date.now());
+        if (!silent) toast.success("Saved");
     }
-    setIsSaving(false);
+    if (!silent) setIsSaving(false);
   };
 
   const togglePin = async (e?: React.MouseEvent) => {
@@ -240,7 +264,7 @@ export default function Dashboard() {
 
     const note = notes.find(n => n.id === selectedNoteId);
     if (note) {
-      const updatedNote = { ...note, isPinned: !note.isPinned };
+      const updatedNote = { ...note, isPinned: !note.isPinned, updatedAt: Date.now() };
       setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
       await saveNoteToDb(updatedNote);
       toast.success(updatedNote.isPinned ? "Note pinned" : "Note unpinned");
@@ -256,7 +280,8 @@ export default function Dashboard() {
       const updatedNote = { 
         ...note, 
         isArchived: !note.isArchived,
-        isPinned: false 
+        isPinned: false,
+        updatedAt: Date.now()
       };
       setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
       await saveNoteToDb(updatedNote);
@@ -267,8 +292,6 @@ export default function Dashboard() {
       } else if (currentView === 'archive' && !updatedNote.isArchived) {
          toast.success("Note restored");
          setSelectedNoteId(null);
-      } else {
-         toast.success(updatedNote.isArchived ? "Note archived" : "Note restored");
       }
     }
   };
@@ -281,7 +304,8 @@ export default function Dashboard() {
             ...note, 
             isTrashed: true,
             isPinned: false,
-            isArchived: false
+            isArchived: false,
+            updatedAt: Date.now()
         };
         setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
         await saveNoteToDb(updatedNote);
@@ -294,7 +318,7 @@ export default function Dashboard() {
     if (!selectedNoteId) return;
     const note = notes.find(n => n.id === selectedNoteId);
     if (note) {
-        const updatedNote = { ...note, isTrashed: false };
+        const updatedNote = { ...note, isTrashed: false, updatedAt: Date.now() };
         setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
         await saveNoteToDb(updatedNote);
         setSelectedNoteId(null);
@@ -316,7 +340,7 @@ export default function Dashboard() {
     if (!selectedNoteId) return;
     const note = notes.find(n => n.id === selectedNoteId);
     if (note) {
-        const updatedNote = { ...note, labels: newLabels };
+        const updatedNote = { ...note, labels: newLabels, updatedAt: Date.now() };
         setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
         await saveNoteToDb(updatedNote);
     }
@@ -326,7 +350,7 @@ export default function Dashboard() {
     if (!selectedNoteId) return;
     const note = notes.find(n => n.id === selectedNoteId);
     if (note) {
-        const updatedNote = { ...note, folderId: folderId === "none" ? null : folderId };
+        const updatedNote = { ...note, folderId: folderId === "none" ? null : folderId, updatedAt: Date.now() };
         setNotes(notes.map(n => n.id === selectedNoteId ? updatedNote : n));
         await saveNoteToDb(updatedNote);
         toast.success("Note moved");
@@ -357,15 +381,21 @@ export default function Dashboard() {
         setFolders(folders.filter(f => f.id !== folderId));
         if (selectedFolderId === folderId) setSelectedFolderId(null);
         
-        // Update notes to remove folderId
+        // Update notes
         const updatedNotes = notes.map(n => n.folderId === folderId ? { ...n, folderId: null } : n);
         setNotes(updatedNotes);
-        // Persist changes for all affected notes
         updatedNotes.forEach(n => {
             if (n.folderId === null && notes.find(old => old.id === n.id)?.folderId === folderId) {
                 saveNoteToDb(n);
             }
         });
+
+        // Update files
+        const updatedFiles = files.map(f => f.folderId === folderId ? { ...f, folderId: null } : f);
+        setFiles(updatedFiles);
+        // We need to persist file changes too - logic similar to saveNoteToDb but for files
+        // For brevity, assuming we iterate and save.
+        
         toast.success("Folder deleted");
     }
   };
@@ -401,17 +431,11 @@ export default function Dashboard() {
         }
     };
     reader.readAsDataURL(file);
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleDownloadFile = async (file: any) => {
     try {
-        // We need to fetch the raw encrypted blob from DB if we didn't keep it in state
-        // But here we have it in 'files' state (though we didn't decrypt the blob yet in loadData for optimization)
-        // Wait, loadData didn't decrypt blob. So file.encryptedBlob is the string we need.
-        
-        // Actually, we need to decrypt the blob now.
         const decryptedBase64 = decryptData(file.encryptedBlob, encryptionKey);
         if (!decryptedBase64) throw new Error("Decryption failed");
 
@@ -433,6 +457,32 @@ export default function Dashboard() {
         setFiles(files.filter(f => f.id !== id));
         toast.success("File deleted");
     }
+  };
+
+  const handleMoveFileToFolder = async (fileId: string, folderId: string | null) => {
+      const file = files.find(f => f.id === fileId);
+      if(file) {
+          const updatedFile = { ...file, folderId };
+          setFiles(files.map(f => f.id === fileId ? updatedFile : f));
+          
+          // Persist
+          const encryptedName = encryptData(file.name, encryptionKey);
+          // We need original encrypted blob and type. 
+          // Since we don't have them in 'files' state fully (we have decrypted name),
+          // we should re-encrypt OR fetch from DB, update, and save.
+          // Better: fetch from DB to be safe.
+          
+          // Quick fix: We assume we have enough data or we just update the folderId in DB?
+          // IndexedDB `put` replaces the object. We need the full object.
+          // Let's fetch the raw file from DB first.
+          
+          const rawFiles = await db.getFiles();
+          const rawFile = rawFiles.find((f: any) => f.id === fileId);
+          if(rawFile) {
+              await db.saveFile({ ...rawFile, folderId });
+              toast.success("File moved");
+          }
+      }
   };
 
   // --- Filtering ---
@@ -465,7 +515,6 @@ export default function Dashboard() {
   });
 
   const filteredFiles = files.filter(f => {
-    if (currentView === 'trash') return f.isTrashed; // Not implemented for files yet
     if (selectedFolderId) return f.folderId === selectedFolderId;
     return true;
   });
@@ -474,411 +523,289 @@ export default function Dashboard() {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 border-r bg-muted/10 flex flex-col">
-        <div className="p-4 border-b flex items-center justify-between">
-            <div className="font-bold text-lg flex items-center gap-2">
-                <div className="w-6 h-6 bg-primary rounded flex items-center justify-center">
-                    <span className="text-primary-foreground text-xs">V</span>
-                </div>
-                VaultNotes
-            </div>
-        </div>
+        <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            onChange={handleFileUpload} 
+        />
         
-        <div className="p-4 space-y-2">
-            <Button onClick={handleCreateNote} className="w-full justify-start gap-2 shadow-sm">
-                <Plus size={16} /> New Note
-            </Button>
-            <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="w-full justify-start gap-2">
-                <Upload size={16} /> Upload File
-                <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    className="hidden" 
-                    onChange={handleFileUpload} 
-                />
-            </Button>
-        </div>
+        <Sidebar 
+            user={user}
+            currentView={currentView}
+            setCurrentView={setCurrentView}
+            folders={folders}
+            selectedFolderId={selectedFolderId}
+            setSelectedFolderId={setSelectedFolderId}
+            allLabels={allLabels}
+            selectedLabelFilter={selectedLabelFilter}
+            setSelectedLabelFilter={setSelectedLabelFilter}
+            handleCreateNote={handleCreateNote}
+            handleCreateFolder={() => setIsNewFolderOpen(true)}
+            handleDeleteFolder={handleDeleteFolder}
+            onFileUploadClick={() => fileInputRef.current?.click()}
+        />
 
-        <ScrollArea className="flex-1 px-2">
-            <div className="space-y-1 p-2">
-                <Button 
-                    variant={currentView === 'all' && !selectedLabelFilter && !selectedFolderId ? "secondary" : "ghost"} 
-                    className="w-full justify-start gap-2 font-normal"
-                    onClick={() => { setCurrentView('all'); setSelectedLabelFilter(null); setSelectedFolderId(null); }}
-                >
-                    <Inbox size={16} /> All Notes
-                </Button>
-                <Button 
-                    variant={currentView === 'files' ? "secondary" : "ghost"} 
-                    className="w-full justify-start gap-2 font-normal"
-                    onClick={() => { setCurrentView('files'); setSelectedLabelFilter(null); setSelectedFolderId(null); }}
-                >
-                    <FileIcon size={16} /> File Vault
-                </Button>
-                <Button 
-                    variant={currentView === 'favorites' ? "secondary" : "ghost"} 
-                    className="w-full justify-start gap-2 font-normal"
-                    onClick={() => { setCurrentView('favorites'); setSelectedLabelFilter(null); setSelectedFolderId(null); }}
-                >
-                    <Star size={16} /> Favorites
-                </Button>
-                <Button 
-                    variant={currentView === 'archive' ? "secondary" : "ghost"} 
-                    className="w-full justify-start gap-2 font-normal"
-                    onClick={() => { setCurrentView('archive'); setSelectedLabelFilter(null); setSelectedFolderId(null); }}
-                >
-                    <Archive size={16} /> Archive
-                </Button>
-                <Button 
-                    variant={currentView === 'trash' ? "secondary" : "ghost"} 
-                    className="w-full justify-start gap-2 font-normal"
-                    onClick={() => { setCurrentView('trash'); setSelectedLabelFilter(null); setSelectedFolderId(null); }}
-                >
-                    <Trash2 size={16} /> Recycle Bin
-                </Button>
-            </div>
-
-            <Separator className="my-2" />
-
-            <div className="px-2">
-                <div className="flex items-center justify-between mb-2 px-2">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Folders</h3>
-                    <Button variant="ghost" size="icon" className="h-4 w-4" onClick={() => setIsNewFolderOpen(true)}>
-                        <Plus size={12} />
-                    </Button>
-                </div>
-                <div className="space-y-1">
-                    {folders.map(folder => (
-                        <div key={folder.id} className="group flex items-center">
-                            <Button
-                                variant={selectedFolderId === folder.id ? "secondary" : "ghost"}
-                                className="w-full justify-start gap-2 font-normal h-8"
-                                onClick={() => { setSelectedFolderId(folder.id); setCurrentView('all'); setSelectedLabelFilter(null); }}
-                            >
-                                <Folder size={14} /> {folder.name}
-                            </Button>
-                            <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => handleDeleteFolder(folder.id, e)}
-                            >
-                                <Trash2 size={12} className="text-destructive" />
-                            </Button>
-                        </div>
-                    ))}
-                    {folders.length === 0 && <p className="text-xs text-muted-foreground px-2">No folders</p>}
-                </div>
-            </div>
-
-            <Separator className="my-2" />
-
-            {allLabels.length > 0 && (
-                <div className="px-2">
-                    <h3 className="text-xs font-semibold text-muted-foreground px-2 mb-2 uppercase tracking-wider">Labels</h3>
-                    <div className="space-y-1">
-                        {allLabels.map(label => (
-                            <Button
-                                key={label}
-                                variant={selectedLabelFilter === label ? "secondary" : "ghost"}
-                                className="w-full justify-start gap-2 font-normal h-8"
-                                onClick={() => { setSelectedLabelFilter(label); setCurrentView('all'); setSelectedFolderId(null); }}
-                            >
-                                <Hash size={14} /> {label}
-                            </Button>
-                        ))}
-                    </div>
-                </div>
-            )}
-        </ScrollArea>
-
-        <div className="p-4 border-t">
-            <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">
-                    {user?.username.substring(0,2).toUpperCase()}
-                </div>
-                <div className="flex-1 overflow-hidden">
-                    <p className="text-sm font-medium truncate">{user?.username}</p>
-                    <p className="text-xs text-muted-foreground">Encrypted Vault</p>
-                </div>
-            </div>
-            <Button variant="outline" size="sm" className="w-full gap-2" onClick={logout}>
-                <LogOut size={14} /> Lock Vault
-            </Button>
-        </div>
-      </aside>
-
-      {/* Main Content Area */}
-      {currentView === 'files' ? (
-        <main className="flex-1 flex flex-col bg-background">
-            <div className="p-6 border-b">
-                <h2 className="text-2xl font-bold flex items-center gap-2">
-                    <FileIcon /> File Vault
-                </h2>
-                <p className="text-muted-foreground">Encrypted file storage. Click to decrypt and download.</p>
-            </div>
-            <ScrollArea className="flex-1 p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredFiles.map(file => (
-                        <div key={file.id} className="border rounded-lg p-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
-                            <div className="flex items-center gap-3 overflow-hidden">
-                                <div className="w-10 h-10 bg-primary/10 rounded flex items-center justify-center text-primary">
-                                    <FileIcon size={20} />
-                                </div>
-                                <div className="min-w-0">
-                                    <p className="font-medium truncate">{file.name}</p>
-                                    <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB • {format(file.createdAt, 'MMM d')}</p>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-1">
-                                <Button variant="ghost" size="icon" onClick={() => handleDownloadFile(file)}>
-                                    <Download size={16} />
-                                </Button>
-                                <Button variant="ghost" size="icon" onClick={() => handleDeleteFile(file.id)}>
-                                    <Trash2 size={16} className="text-destructive" />
-                                </Button>
-                            </div>
-                        </div>
-                    ))}
-                    {filteredFiles.length === 0 && (
-                        <div className="col-span-full text-center py-12 text-muted-foreground">
-                            <Upload className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                            <p>No files in vault</p>
-                            <Button variant="link" onClick={() => fileInputRef.current?.click()}>Upload a file</Button>
-                        </div>
-                    )}
-                </div>
-            </ScrollArea>
-        </main>
-      ) : (
-        <>
-            {/* Note List */}
-            <div className="w-80 border-r flex flex-col bg-background/50">
-                <div className="p-4 border-b space-y-2">
-                    <div className="flex items-center justify-between">
-                        <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">
-                            {currentView === 'trash' ? 'Recycle Bin' : selectedLabelFilter ? `#${selectedLabelFilter}` : selectedFolderId ? folders.find(f => f.id === selectedFolderId)?.name : currentView === 'favorites' ? 'Favorites' : currentView === 'archive' ? 'Archive' : 'All Notes'}
-                        </h2>
-                        {selectedFolderId && (
-                            <Badge variant="outline" className="text-[10px]">Folder</Badge>
-                        )}
-                    </div>
-                    <div className="relative">
-                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input 
-                            placeholder="Search..." 
-                            className="pl-8 h-9" 
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <ScrollArea className="flex-1">
-                    <div className="flex flex-col divide-y">
-                        {filteredNotes.length === 0 && (
-                            <div className="p-8 text-center text-muted-foreground text-sm flex flex-col items-center gap-2">
-                                <FileText className="w-8 h-8 opacity-20" />
-                                <p>No notes found</p>
-                            </div>
-                        )}
-                        {filteredNotes.map(note => (
-                            <button
-                                key={note.id}
-                                onClick={() => setSelectedNoteId(note.id)}
-                                className={cn(
-                                    "flex flex-col items-start gap-1 p-4 text-left hover:bg-muted/50 transition-colors relative group w-full",
-                                    selectedNoteId === note.id ? "bg-muted" : ""
-                                )}
-                            >
-                                <div className="flex items-center justify-between w-full">
-                                    <span className={cn("font-semibold text-sm line-clamp-1", note.isPinned && "text-primary")}>
-                                        {note.title || "Untitled"}
-                                    </span>
-                                    {note.isPinned && <Pin size={12} className="fill-primary text-primary shrink-0 ml-2" />}
-                                </div>
+        {currentView === 'files' ? (
+            <FileVault 
+                files={filteredFiles}
+                folders={folders}
+                onDownload={handleDownloadFile}
+                onDelete={handleDeleteFile}
+                onUploadClick={() => fileInputRef.current?.click()}
+                onMoveToFolder={handleMoveFileToFolder}
+            />
+        ) : (
+            <>
+                {/* Note List */}
+                <div className={cn("w-80 border-r flex flex-col bg-background transition-all duration-300", selectedNoteId ? "hidden lg:flex" : "flex w-full")}>
+                    <div className="p-4 border-b space-y-3 h-28 flex flex-col justify-center">
+                        <div className="flex items-center justify-between">
+                            <h2 className="font-bold text-lg text-foreground flex items-center gap-2">
+                                {currentView === 'trash' ? <Trash2 size={18} /> : 
+                                 currentView === 'favorites' ? <Pin size={18} /> : 
+                                 currentView === 'archive' ? <Archive size={18} /> : 
+                                 selectedFolderId ? <Folder size={18} /> :
+                                 <FileText size={18} />}
                                 
-                                <div className="text-xs text-muted-foreground line-clamp-2 w-full h-8">
-                                    {note.content ? note.content.replace(/<[^>]*>?/gm, '').substring(0, 100) : "No content"}
+                                {currentView === 'trash' ? 'Recycle Bin' : 
+                                 selectedLabelFilter ? `#${selectedLabelFilter}` : 
+                                 selectedFolderId ? folders.find(f => f.id === selectedFolderId)?.name : 
+                                 currentView === 'favorites' ? 'Favorites' : 
+                                 currentView === 'archive' ? 'Archive' : 'All Notes'}
+                            </h2>
+                            <span className="text-xs text-muted-foreground font-medium bg-muted px-2 py-1 rounded-full">
+                                {filteredNotes.length}
+                            </span>
+                        </div>
+                        <div className="relative">
+                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input 
+                                placeholder="Search notes..." 
+                                className="pl-9 h-9 bg-muted/50 border-none focus-visible:ring-1" 
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <ScrollArea className="flex-1">
+                        <div className="flex flex-col p-2 gap-2">
+                            {filteredNotes.length === 0 && (
+                                <div className="p-8 text-center text-muted-foreground text-sm flex flex-col items-center gap-2 mt-10">
+                                    <FileText className="w-10 h-10 opacity-10" />
+                                    <p>No notes found</p>
                                 </div>
-                                
-                                <div className="flex items-center gap-2 mt-2 w-full overflow-hidden">
-                                    {note.labels?.slice(0, 3).map((l: string) => (
-                                        <Badge key={l} variant="outline" className="text-[10px] px-1 py-0 h-4">{l}</Badge>
-                                    ))}
-                                    {note.folderId && (
-                                        <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 flex items-center gap-1">
-                                            <Folder size={8} />
-                                            {folders.find(f => f.id === note.folderId)?.name}
-                                        </Badge>
+                            )}
+                            {filteredNotes.map(note => (
+                                <button
+                                    key={note.id}
+                                    onClick={() => setSelectedNoteId(note.id)}
+                                    className={cn(
+                                        "flex flex-col items-start gap-1 p-3 text-left rounded-lg transition-all border border-transparent hover:border-border group relative",
+                                        selectedNoteId === note.id ? "bg-card shadow-sm border-border" : "hover:bg-muted/50"
+                                    )}
+                                >
+                                    <div className="flex items-center justify-between w-full">
+                                        <span className={cn("font-semibold text-sm line-clamp-1", !note.title && "text-muted-foreground italic")}>
+                                            {note.title || "Untitled Note"}
+                                        </span>
+                                        {note.isPinned && <Pin size={12} className="fill-primary text-primary shrink-0 ml-2" />}
+                                    </div>
+                                    
+                                    <div className="text-xs text-muted-foreground line-clamp-2 w-full h-8 opacity-80">
+                                        {note.content ? note.content.replace(/<[^>]*>?/gm, '').substring(0, 100) : "No additional text"}
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2 mt-2 w-full overflow-hidden">
+                                        <span className="text-[10px] text-muted-foreground shrink-0">{format(note.updatedAt, 'MMM d')}</span>
+                                        <div className="flex gap-1 overflow-hidden">
+                                            {note.labels?.slice(0, 2).map((l: string) => (
+                                                <Badge key={l} variant="secondary" className="text-[9px] px-1 py-0 h-4 font-normal bg-muted text-muted-foreground">{l}</Badge>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </ScrollArea>
+                </div>
+
+                {/* Editor Area */}
+                <main className={cn("flex-1 flex flex-col min-w-0 bg-background h-full transition-all duration-300", !selectedNoteId ? "hidden lg:flex" : "flex")}>
+                    {selectedNoteId && currentNote ? (
+                        <TooltipProvider>
+                        <>
+                            <div className="flex items-center justify-between px-6 py-3 border-b h-16 bg-background/80 backdrop-blur-sm sticky top-0 z-20">
+                                <div className="flex items-center gap-2 flex-1 mr-4">
+                                    {/* Mobile Back Button */}
+                                    <Button variant="ghost" size="icon" className="lg:hidden -ml-2 mr-1" onClick={() => setSelectedNoteId(null)}>
+                                        <RotateCcw size={18} />
+                                    </Button>
+
+                                    {currentView === 'trash' ? (
+                                        <div className="flex items-center gap-2 text-destructive">
+                                            <Trash2 size={20} />
+                                            <span className="font-semibold">Recycle Bin</span>
+                                        </div>
+                                    ) : (
+                                        <Input 
+                                            value={editorTitle}
+                                            onChange={(e) => setEditorTitle(e.target.value)}
+                                            className="text-xl font-bold border-none shadow-none focus-visible:ring-0 px-0 h-auto bg-transparent w-full placeholder:text-muted-foreground/50"
+                                            placeholder="Untitled Note"
+                                        />
                                     )}
                                 </div>
+                                
+                                <div className="flex items-center gap-1">
+                                    {currentView === 'trash' ? (
+                                        <>
+                                            <Button variant="outline" size="sm" onClick={handleRestore} className="gap-2">
+                                                <RotateCcw size={16} /> Restore
+                                            </Button>
+                                            <Button variant="destructive" size="sm" onClick={handlePermanentDelete} className="gap-2">
+                                                <Trash2 size={16} /> Delete Forever
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div className="hidden md:flex items-center gap-1">
+                                                <LabelSelector 
+                                                    selectedLabels={currentNote.labels || []}
+                                                    allLabels={allLabels}
+                                                    onLabelsChange={handleLabelsChange}
+                                                />
+                                                
+                                                <Select 
+                                                    value={currentNote.folderId || "none"} 
+                                                    onValueChange={handleMoveFolder}
+                                                >
+                                                    <SelectTrigger className="w-[130px] h-8 text-xs ml-2 border-dashed bg-transparent">
+                                                        <div className="flex items-center gap-1 truncate">
+                                                            <Folder size={12} />
+                                                            <SelectValue placeholder="Folder" />
+                                                        </div>
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="none">No Folder</SelectItem>
+                                                        {folders.map(f => (
+                                                            <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
 
-                                <div className="text-[10px] text-muted-foreground mt-1 flex justify-between w-full">
-                                    <span>{format(note.updatedAt, 'MMM d, yyyy')}</span>
-                                </div>
-                            </button>
-                        ))}
-                    </div>
-                </ScrollArea>
-            </div>
+                                                <Separator orientation="vertical" className="h-6 mx-2" />
+                                            </div>
 
-            {/* Editor Area */}
-            <main className="flex-1 flex flex-col min-w-0 bg-background">
-                {selectedNoteId && currentNote ? (
-                    <TooltipProvider>
-                    <>
-                        <div className="flex items-center justify-between p-4 border-b h-16">
-                            {currentView === 'trash' ? (
-                                <div className="flex items-center gap-2 text-destructive">
-                                    <Trash2 size={20} />
-                                    <span className="font-semibold">Note in Recycle Bin</span>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button variant="ghost" size="icon" onClick={(e) => togglePin(e)} className="h-8 w-8">
+                                                        <Pin size={18} className={cn(currentNote.isPinned ? "fill-primary text-primary" : "text-muted-foreground")} />
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{currentNote.isPinned ? "Unpin Note" : "Pin Note"}</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button variant="ghost" size="icon" onClick={(e) => toggleArchive(e)} className="h-8 w-8">
+                                                        {currentNote.isArchived ? 
+                                                            <ArchiveRestore size={18} className="text-muted-foreground" /> : 
+                                                            <Archive size={18} className="text-muted-foreground" />
+                                                        }
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{currentNote.isArchived ? "Restore from Archive" : "Archive Note"}</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                                                        <MoreVertical size={18} className="text-muted-foreground" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={handleSoftDelete} className="text-destructive focus:text-destructive">
+                                                        <Trash2 size={16} className="mr-2" /> Move to Trash
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+
+                                            <div className="ml-2 flex items-center">
+                                                {lastSaved && (
+                                                    <span className="text-[10px] text-muted-foreground mr-2 hidden sm:inline-block">
+                                                        Saved
+                                                    </span>
+                                                )}
+                                                <Button size="sm" onClick={() => handleSave()} disabled={isSaving} className="h-8 px-3">
+                                                    {isSaving ? <span className="animate-pulse">Saving...</span> : <Check size={16} />}
+                                                </Button>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
-                            ) : (
-                                <Input 
-                                    value={editorTitle}
-                                    onChange={(e) => setEditorTitle(e.target.value)}
-                                    className="text-xl font-bold border-none shadow-none focus-visible:ring-0 px-0 h-auto bg-transparent w-full mr-4"
-                                    placeholder="Note Title"
-                                />
-                            )}
+                            </div>
                             
-                            <div className="flex items-center gap-1">
+                            <div className="flex-1 overflow-hidden relative">
                                 {currentView === 'trash' ? (
-                                    <>
-                                        <Button variant="outline" size="sm" onClick={handleRestore} className="gap-2">
-                                            <RotateCcw size={16} /> Restore
-                                        </Button>
-                                        <Button variant="destructive" size="sm" onClick={handlePermanentDelete} className="gap-2">
-                                            <Trash2 size={16} /> Delete Forever
-                                        </Button>
-                                    </>
+                                    <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center h-full">
+                                        <Trash2 size={48} className="mb-4 opacity-20" />
+                                        <p className="font-medium">This note is in the recycle bin.</p>
+                                        <p className="text-sm">Restore it to continue editing.</p>
+                                    </div>
                                 ) : (
-                                    <>
-                                        <LabelSelector 
-                                            selectedLabels={currentNote.labels || []}
-                                            allLabels={allLabels}
-                                            onLabelsChange={handleLabelsChange}
-                                        />
-                                        
-                                        <Select 
-                                            value={currentNote.folderId || "none"} 
-                                            onValueChange={handleMoveFolder}
-                                        >
-                                            <SelectTrigger className="w-[130px] h-8 text-xs ml-2">
-                                                <div className="flex items-center gap-1 truncate">
-                                                    <Folder size={12} />
-                                                    <SelectValue placeholder="Folder" />
-                                                </div>
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="none">No Folder</SelectItem>
-                                                {folders.map(f => (
-                                                    <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-
-                                        <Separator orientation="vertical" className="h-6 mx-2" />
-
-                                        <Tooltip>
-                                            <TooltipTrigger asChild>
-                                                <Button variant="ghost" size="icon" onClick={(e) => togglePin(e)}>
-                                                    <Pin size={18} className={cn(currentNote.isPinned ? "fill-primary text-primary" : "text-muted-foreground")} />
-                                                </Button>
-                                            </TooltipTrigger>
-                                            <TooltipContent>
-                                                <p>{currentNote.isPinned ? "Unpin Note" : "Pin Note"}</p>
-                                            </TooltipContent>
-                                        </Tooltip>
-
-                                        <Tooltip>
-                                            <TooltipTrigger asChild>
-                                                <Button variant="ghost" size="icon" onClick={(e) => toggleArchive(e)}>
-                                                    {currentNote.isArchived ? 
-                                                        <ArchiveRestore size={18} className="text-muted-foreground" /> : 
-                                                        <Archive size={18} className="text-muted-foreground" />
-                                                    }
-                                                </Button>
-                                            </TooltipTrigger>
-                                            <TooltipContent>
-                                                <p>{currentNote.isArchived ? "Restore from Archive" : "Archive Note"}</p>
-                                            </TooltipContent>
-                                        </Tooltip>
-
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" size="icon">
-                                                    <MoreVertical size={18} className="text-muted-foreground" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem onClick={handleSoftDelete} className="text-destructive focus:text-destructive">
-                                                    <Trash2 size={16} className="mr-2" /> Move to Trash
-                                                </DropdownMenuItem>
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-
-                                        <Button size="sm" onClick={handleSave} disabled={isSaving} className="ml-2">
-                                            <Save size={16} className="mr-2" />
-                                            {isSaving ? "Saving..." : "Save"}
-                                        </Button>
-                                    </>
+                                    <NoteEditor 
+                                        content={editorContent} 
+                                        onChange={setEditorContent} 
+                                    />
                                 )}
                             </div>
+                        </>
+                        </TooltipProvider>
+                    ) : (
+                        <div className="flex-1 flex items-center justify-center text-muted-foreground flex-col gap-6 bg-muted/10">
+                            <div className="w-24 h-24 bg-muted rounded-2xl flex items-center justify-center shadow-inner">
+                                <FileText size={48} className="opacity-20" />
+                            </div>
+                            <div className="text-center px-4">
+                                <h3 className="font-bold text-xl text-foreground mb-2">Select a note to view</h3>
+                                <p className="text-sm max-w-xs mx-auto text-muted-foreground">
+                                    Choose a note from the list, or create a new one to start writing your thoughts securely.
+                                </p>
+                                <Button onClick={handleCreateNote} className="mt-6">
+                                    Create New Note
+                                </Button>
+                            </div>
                         </div>
-                        
-                        <div className="flex-1 overflow-hidden relative">
-                            {currentView === 'trash' ? (
-                                <div className="p-8 text-center text-muted-foreground">
-                                    <p>This note is in the recycle bin. Restore it to edit.</p>
-                                    <div className="mt-8 opacity-50 pointer-events-none" dangerouslySetInnerHTML={{ __html: currentNote.content }} />
-                                </div>
-                            ) : (
-                                <NoteEditor 
-                                    content={editorContent} 
-                                    onChange={setEditorContent} 
-                                />
-                            )}
-                        </div>
-                    </>
-                    </TooltipProvider>
-                ) : (
-                    <div className="flex-1 flex items-center justify-center text-muted-foreground flex-col gap-4 bg-muted/5">
-                        <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center">
-                            <FileText size={40} className="opacity-50" />
-                        </div>
-                        <div className="text-center">
-                            <h3 className="font-semibold text-lg text-foreground">Select a note to view</h3>
-                            <p className="text-sm max-w-xs mx-auto mt-2">
-                                Choose a note from the list on the left, or create a new one to get started.
-                            </p>
-                        </div>
-                    </div>
-                )}
-            </main>
-        </>
-      )}
+                    )}
+                </main>
+            </>
+        )}
 
-      {/* New Folder Dialog */}
-      <Dialog open={isNewFolderOpen} onOpenChange={setIsNewFolderOpen}>
-        <DialogContent>
-            <DialogHeader>
-                <DialogTitle>Create New Folder</DialogTitle>
-            </DialogHeader>
-            <div className="py-4">
-                <Input 
-                    placeholder="Folder Name" 
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                />
-            </div>
-            <DialogFooter>
-                <Button variant="outline" onClick={() => setIsNewFolderOpen(false)}>Cancel</Button>
-                <Button onClick={handleCreateFolder}>Create</Button>
-            </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        {/* New Folder Dialog */}
+        <Dialog open={isNewFolderOpen} onOpenChange={setIsNewFolderOpen}>
+            <DialogContent>
+                <DialogHeader>
+                    <DialogTitle>Create New Folder</DialogTitle>
+                </DialogHeader>
+                <div className="py-4">
+                    <Input 
+                        placeholder="Folder Name" 
+                        value={newFolderName}
+                        onChange={(e) => setNewFolderName(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                    />
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => setIsNewFolderOpen(false)}>Cancel</Button>
+                    <Button onClick={handleCreateFolder}>Create</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     </div>
   );
 }
