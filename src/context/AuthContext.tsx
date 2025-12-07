@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { deriveKey, generateSalt } from '@/lib/crypto';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';

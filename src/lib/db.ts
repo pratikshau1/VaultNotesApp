@@ -5,8 +5,7 @@ interface VaultDB extends DBSchema {
     key: string; // username
     value: {
       username: string;
-      salt: string; // Public salt for key derivation
-      passwordHash: string; // Hash of password for verification (optional, or use encryption check)
+      salt: string;
       createdAt: number;
     };
   };
@@ -19,7 +18,7 @@ interface VaultDB extends DBSchema {
       encryptedContent: string;
       isPinned: boolean;
       isArchived: boolean;
-      isTrashed: boolean; // Recycle Bin support
+      isTrashed: boolean;
       labels: string[];
       createdAt: number;
       updatedAt: number;
@@ -32,16 +31,30 @@ interface VaultDB extends DBSchema {
       id: string;
       name: string; 
       parentId: string | null;
+      createdAt: number;
+    };
+  };
+  files: {
+    key: string;
+    value: {
+      id: string;
+      folderId: string | null;
+      encryptedName: string;
+      encryptedType: string;
+      encryptedBlob: string; // Base64 data
+      size: number;
+      isTrashed: boolean;
+      createdAt: number;
     };
   };
 }
 
 const DB_NAME = 'VaultNotesDB';
-const DB_VERSION = 3; // Bumped version for isTrashed
+const DB_VERSION = 4; // Bumped for 'files' store
 
 export const initDB = async () => {
   return openDB<VaultDB>(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion, newVersion, transaction) {
+    upgrade(db, _oldVersion, _newVersion, _transaction) {
       if (!db.objectStoreNames.contains('users')) {
         db.createObjectStore('users', { keyPath: 'username' });
       }
@@ -52,11 +65,8 @@ export const initDB = async () => {
       if (!db.objectStoreNames.contains('folders')) {
         db.createObjectStore('folders', { keyPath: 'id' });
       }
-      
-      // Migration logic
-      if (oldVersion < 3) {
-        // In a real app, we would iterate and update. 
-        // For now, the UI handles undefined isTrashed as false.
+      if (!db.objectStoreNames.contains('files')) {
+        db.createObjectStore('files', { keyPath: 'id' });
       }
     },
   });
@@ -90,5 +100,21 @@ export const db = {
   async getFolders() {
     const db = await initDB();
     return db.getAll('folders');
+  },
+  async deleteFolder(id: string) {
+    const db = await initDB();
+    return db.delete('folders', id);
+  },
+  async saveFile(file: any) {
+    const db = await initDB();
+    return db.put('files', file);
+  },
+  async getFiles() {
+    const db = await initDB();
+    return db.getAll('files');
+  },
+  async deleteFile(id: string) {
+    const db = await initDB();
+    return db.delete('files', id);
   }
 };

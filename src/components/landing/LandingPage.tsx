@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ShieldCheck, Lock, Database, WifiOff, FileText, Search } from "lucide-react";
+import { ShieldCheck, Lock, Database, WifiOff, FileText } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 
