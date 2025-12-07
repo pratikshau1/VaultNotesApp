@@ -20,7 +20,6 @@ import {
   RotateCcw,
   Hash,
   Folder,
-  FolderPlus,
   File as FileIcon,
   Upload,
   Download,
@@ -41,7 +40,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-  DialogClose,
 } from "@/components/ui/dialog";
 import {
   Select,
