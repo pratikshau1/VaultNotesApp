@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
 import { encryptData, decryptData } from '@/lib/crypto';
@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input';
 import { 
   FileText, 
   Search, 
-  Save, 
   Trash2, 
   Pin, 
   Archive, 
@@ -16,7 +15,9 @@ import {
   RotateCcw,
   Folder,
   MoreVertical,
-  Check
+  Check,
+  Clock,
+  Calendar
 } from 'lucide-react';
 import NoteEditor from './NoteEditor';
 import Sidebar from './Sidebar';
@@ -49,6 +50,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { motion, AnimatePresence } from 'framer-motion';
 
 type ViewType = 'all' | 'favorites' | 'archive' | 'trash' | 'files';
 
@@ -90,29 +92,23 @@ export default function Dashboard() {
     if (selectedNoteId) {
       const note = notes.find(n => n.id === selectedNoteId);
       if (note) {
-        // Only update if different to avoid cursor jumps, though simple equality check helps
         if (note.title !== editorTitle) setEditorTitle(note.title);
-        // Content sync is tricky with rich text, we rely on editor's internal state mostly, 
-        // but for initial load we need this.
-        // We only set content if we are switching notes.
         setEditorContent(note.content);
       }
     } else {
       setEditorTitle("");
       setEditorContent("");
     }
-  }, [selectedNoteId]); // Only run when ID changes, not when content updates to avoid loops
+  }, [selectedNoteId]); 
 
   // Auto-save Logic
   useEffect(() => {
     if (!selectedNoteId || currentView === 'trash') return;
 
-    // Clear existing timeout
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current);
     }
 
-    // Set new timeout for 2 seconds
     autoSaveTimeoutRef.current = setTimeout(() => {
        handleSave(true); // Silent save
     }, 2000);
@@ -159,7 +155,6 @@ export default function Dashboard() {
             return {
                 ...file,
                 name: name || "Unknown File",
-                // Keep blob encrypted until download
             };
         } catch (e) {
             return { ...file, name: "Error", type: "unknown" };
@@ -173,8 +168,7 @@ export default function Dashboard() {
     }
   };
 
-  // --- Note Actions ---
-
+  // --- Note Actions (Same as before) ---
   const handleCreateNote = async () => {
     if (currentView === 'archive' || currentView === 'trash' || currentView === 'files') {
         setCurrentView('all');
@@ -197,11 +191,8 @@ export default function Dashboard() {
       labels: []
     };
 
-    // Optimistic update
     setNotes([newNote, ...notes]);
     setSelectedNoteId(newId);
-    
-    // Initial Save
     await saveNoteToDb(newNote);
   };
 
@@ -233,7 +224,6 @@ export default function Dashboard() {
     
     const noteToSave = notes.find(n => n.id === selectedNoteId);
     
-    // Don't save if nothing changed (optimization)
     if (noteToSave && noteToSave.title === editorTitle && noteToSave.content === editorContent) {
         if (!silent) setIsSaving(false);
         return;
@@ -247,10 +237,7 @@ export default function Dashboard() {
             updatedAt: Date.now()
         };
         
-        // Update local state
         setNotes(prev => prev.map(n => n.id === selectedNoteId ? updatedNote : n));
-        
-        // Persist
         await saveNoteToDb(updatedNote);
         setLastSaved(Date.now());
         if (!silent) toast.success("Saved");
@@ -357,8 +344,6 @@ export default function Dashboard() {
     }
   };
 
-  // --- Folder Actions ---
-
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return;
     const newFolder = {
@@ -381,7 +366,6 @@ export default function Dashboard() {
         setFolders(folders.filter(f => f.id !== folderId));
         if (selectedFolderId === folderId) setSelectedFolderId(null);
         
-        // Update notes
         const updatedNotes = notes.map(n => n.folderId === folderId ? { ...n, folderId: null } : n);
         setNotes(updatedNotes);
         updatedNotes.forEach(n => {
@@ -389,19 +373,12 @@ export default function Dashboard() {
                 saveNoteToDb(n);
             }
         });
-
-        // Update files
-        const updatedFiles = files.map(f => f.folderId === folderId ? { ...f, folderId: null } : f);
-        setFiles(updatedFiles);
-        // We need to persist file changes too - logic similar to saveNoteToDb but for files
-        // For brevity, assuming we iterate and save.
         
         toast.success("Folder deleted");
     }
   };
 
   // --- File Actions ---
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -460,33 +437,20 @@ export default function Dashboard() {
   };
 
   const handleMoveFileToFolder = async (fileId: string, folderId: string | null) => {
-      const file = files.find(f => f.id === fileId);
-      if(file) {
-          const updatedFile = { ...file, folderId };
-          setFiles(files.map(f => f.id === fileId ? updatedFile : f));
-          
-          // Persist
-          const encryptedName = encryptData(file.name, encryptionKey);
-          // We need original encrypted blob and type. 
-          // Since we don't have them in 'files' state fully (we have decrypted name),
-          // we should re-encrypt OR fetch from DB, update, and save.
-          // Better: fetch from DB to be safe.
-          
-          // Quick fix: We assume we have enough data or we just update the folderId in DB?
-          // IndexedDB `put` replaces the object. We need the full object.
-          // Let's fetch the raw file from DB first.
-          
-          const rawFiles = await db.getFiles();
-          const rawFile = rawFiles.find((f: any) => f.id === fileId);
-          if(rawFile) {
-              await db.saveFile({ ...rawFile, folderId });
-              toast.success("File moved");
-          }
+      const updatedFile = { ...files.find(f => f.id === fileId), folderId };
+      setFiles(files.map(f => f.id === fileId ? updatedFile : f));
+      
+      const rawFiles = await db.getFiles();
+      const rawFile = rawFiles.find((f: any) => f.id === fileId);
+      if(rawFile) {
+          await db.saveFile({ ...rawFile, folderId });
+          toast.success("File moved");
+      } else {
+          toast.error("Error moving file");
       }
   };
 
   // --- Filtering ---
-
   const allLabels = useMemo(() => {
     const labels = new Set<string>();
     notes.forEach(note => {
@@ -522,7 +486,7 @@ export default function Dashboard() {
   const currentNote = notes.find(n => n.id === selectedNoteId);
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-screen bg-background overflow-hidden font-sans">
         <input 
             type="file" 
             ref={fileInputRef} 
@@ -557,88 +521,119 @@ export default function Dashboard() {
             />
         ) : (
             <>
-                {/* Note List */}
-                <div className={cn("w-80 border-r flex flex-col bg-background transition-all duration-300", selectedNoteId ? "hidden lg:flex" : "flex w-full")}>
-                    <div className="p-4 border-b space-y-3 h-28 flex flex-col justify-center">
-                        <div className="flex items-center justify-between">
-                            <h2 className="font-bold text-lg text-foreground flex items-center gap-2">
-                                {currentView === 'trash' ? <Trash2 size={18} /> : 
-                                 currentView === 'favorites' ? <Pin size={18} /> : 
-                                 currentView === 'archive' ? <Archive size={18} /> : 
-                                 selectedFolderId ? <Folder size={18} /> :
-                                 <FileText size={18} />}
-                                
-                                {currentView === 'trash' ? 'Recycle Bin' : 
+                {/* Note List - Redesigned as a "Project List" */}
+                <div className={cn(
+                    "w-[350px] border-r flex flex-col bg-background/50 backdrop-blur-sm transition-all duration-300", 
+                    selectedNoteId ? "hidden lg:flex" : "flex w-full"
+                )}>
+                    {/* Header */}
+                    <div className="p-6 pb-2 border-b border-border/50">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="font-bold text-xl tracking-tight text-foreground flex items-center gap-2">
+                                {currentView === 'trash' ? "Recycle Bin" : 
                                  selectedLabelFilter ? `#${selectedLabelFilter}` : 
                                  selectedFolderId ? folders.find(f => f.id === selectedFolderId)?.name : 
-                                 currentView === 'favorites' ? 'Favorites' : 
-                                 currentView === 'archive' ? 'Archive' : 'All Notes'}
+                                 currentView === 'favorites' ? "Favorites" : 
+                                 currentView === 'archive' ? "Archive" : "All Notes"}
                             </h2>
-                            <span className="text-xs text-muted-foreground font-medium bg-muted px-2 py-1 rounded-full">
+                            <Badge variant="outline" className="rounded-full px-2.5 font-normal text-muted-foreground">
                                 {filteredNotes.length}
-                            </span>
+                            </Badge>
                         </div>
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <div className="relative group">
+                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
                             <Input 
-                                placeholder="Search notes..." 
-                                className="pl-9 h-9 bg-muted/50 border-none focus-visible:ring-1" 
+                                placeholder="Search..." 
+                                className="pl-9 h-10 bg-secondary/50 border-transparent focus:bg-background focus:border-input transition-all rounded-lg" 
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                             />
                         </div>
                     </div>
+
+                    {/* List */}
                     <ScrollArea className="flex-1">
-                        <div className="flex flex-col p-2 gap-2">
+                        <div className="flex flex-col p-3 gap-2">
+                            <AnimatePresence>
                             {filteredNotes.length === 0 && (
-                                <div className="p-8 text-center text-muted-foreground text-sm flex flex-col items-center gap-2 mt-10">
-                                    <FileText className="w-10 h-10 opacity-10" />
-                                    <p>No notes found</p>
-                                </div>
+                                <motion.div 
+                                    initial={{ opacity: 0 }} 
+                                    animate={{ opacity: 1 }}
+                                    className="p-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-3 mt-4"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+                                        <FileText className="w-5 h-5 opacity-20" />
+                                    </div>
+                                    <p>No entries found</p>
+                                </motion.div>
                             )}
                             {filteredNotes.map(note => (
-                                <button
+                                <motion.button
                                     key={note.id}
+                                    layout
+                                    initial={{ opacity: 0, y: 5 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0 }}
                                     onClick={() => setSelectedNoteId(note.id)}
                                     className={cn(
-                                        "flex flex-col items-start gap-1 p-3 text-left rounded-lg transition-all border border-transparent hover:border-border group relative",
-                                        selectedNoteId === note.id ? "bg-card shadow-sm border-border" : "hover:bg-muted/50"
+                                        "flex flex-col items-start gap-1 p-4 text-left rounded-xl transition-all duration-200 border group relative",
+                                        selectedNoteId === note.id 
+                                            ? "bg-card shadow-md border-border/50 ring-1 ring-black/5 dark:ring-white/5" 
+                                            : "border-transparent hover:bg-card/60 hover:shadow-sm"
                                     )}
                                 >
-                                    <div className="flex items-center justify-between w-full">
-                                        <span className={cn("font-semibold text-sm line-clamp-1", !note.title && "text-muted-foreground italic")}>
+                                    <div className="flex items-center justify-between w-full mb-1">
+                                        <span className={cn(
+                                            "font-semibold text-base line-clamp-1 tracking-tight", 
+                                            !note.title && "text-muted-foreground italic",
+                                            selectedNoteId === note.id ? "text-primary" : "text-foreground"
+                                        )}>
                                             {note.title || "Untitled Note"}
                                         </span>
                                         {note.isPinned && <Pin size={12} className="fill-primary text-primary shrink-0 ml-2" />}
                                     </div>
                                     
-                                    <div className="text-xs text-muted-foreground line-clamp-2 w-full h-8 opacity-80">
-                                        {note.content ? note.content.replace(/<[^>]*>?/gm, '').substring(0, 100) : "No additional text"}
+                                    <div className="text-sm text-muted-foreground line-clamp-2 w-full h-10 leading-relaxed opacity-80 mb-2">
+                                        {note.content ? note.content.replace(/<[^>]*>?/gm, '').substring(0, 120) : "No additional text"}
                                     </div>
                                     
-                                    <div className="flex items-center gap-2 mt-2 w-full overflow-hidden">
-                                        <span className="text-[10px] text-muted-foreground shrink-0">{format(note.updatedAt, 'MMM d')}</span>
-                                        <div className="flex gap-1 overflow-hidden">
+                                    <div className="flex items-center justify-between w-full mt-1">
+                                        <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+                                            <span>{format(note.updatedAt, 'MMM d')}</span>
+                                            {note.folderId && (
+                                                <>
+                                                    <span>•</span>
+                                                    <span className="max-w-[80px] truncate">
+                                                        {folders.find(f => f.id === note.folderId)?.name}
+                                                    </span>
+                                                </>
+                                            )}
+                                        </div>
+                                        <div className="flex gap-1">
                                             {note.labels?.slice(0, 2).map((l: string) => (
-                                                <Badge key={l} variant="secondary" className="text-[9px] px-1 py-0 h-4 font-normal bg-muted text-muted-foreground">{l}</Badge>
+                                                <div key={l} className="w-2 h-2 rounded-full bg-primary/20" title={l} />
                                             ))}
                                         </div>
                                     </div>
-                                </button>
+                                </motion.button>
                             ))}
+                            </AnimatePresence>
                         </div>
                     </ScrollArea>
                 </div>
 
-                {/* Editor Area */}
-                <main className={cn("flex-1 flex flex-col min-w-0 bg-background h-full transition-all duration-300", !selectedNoteId ? "hidden lg:flex" : "flex")}>
+                {/* Editor Area - Clean & Expansive */}
+                <main className={cn(
+                    "flex-1 flex flex-col min-w-0 bg-background h-full transition-all duration-300 relative", 
+                    !selectedNoteId ? "hidden lg:flex" : "flex"
+                )}>
                     {selectedNoteId && currentNote ? (
                         <TooltipProvider>
                         <>
-                            <div className="flex items-center justify-between px-6 py-3 border-b h-16 bg-background/80 backdrop-blur-sm sticky top-0 z-20">
-                                <div className="flex items-center gap-2 flex-1 mr-4">
-                                    {/* Mobile Back Button */}
-                                    <Button variant="ghost" size="icon" className="lg:hidden -ml-2 mr-1" onClick={() => setSelectedNoteId(null)}>
+                            {/* Editor Header */}
+                            <div className="flex items-center justify-between px-8 py-4 h-20 bg-background/95 backdrop-blur z-20 sticky top-0">
+                                <div className="flex items-center gap-4 flex-1 mr-4">
+                                    <Button variant="ghost" size="icon" className="lg:hidden -ml-2" onClick={() => setSelectedNoteId(null)}>
                                         <RotateCcw size={18} />
                                     </Button>
 
@@ -651,25 +646,22 @@ export default function Dashboard() {
                                         <Input 
                                             value={editorTitle}
                                             onChange={(e) => setEditorTitle(e.target.value)}
-                                            className="text-xl font-bold border-none shadow-none focus-visible:ring-0 px-0 h-auto bg-transparent w-full placeholder:text-muted-foreground/50"
-                                            placeholder="Untitled Note"
+                                            className="text-3xl font-bold border-none shadow-none focus-visible:ring-0 px-0 h-auto bg-transparent w-full placeholder:text-muted-foreground/30 tracking-tight text-primary"
+                                            placeholder="Untitled"
                                         />
                                     )}
                                 </div>
                                 
-                                <div className="flex items-center gap-1">
+                                {/* Actions Toolbar */}
+                                <div className="flex items-center gap-2 bg-card/50 p-1 rounded-full border shadow-sm">
                                     {currentView === 'trash' ? (
                                         <>
-                                            <Button variant="outline" size="sm" onClick={handleRestore} className="gap-2">
-                                                <RotateCcw size={16} /> Restore
-                                            </Button>
-                                            <Button variant="destructive" size="sm" onClick={handlePermanentDelete} className="gap-2">
-                                                <Trash2 size={16} /> Delete Forever
-                                            </Button>
+                                            <Button variant="ghost" size="sm" onClick={handleRestore} className="rounded-full">Restore</Button>
+                                            <Button variant="destructive" size="sm" onClick={handlePermanentDelete} className="rounded-full">Delete</Button>
                                         </>
                                     ) : (
                                         <>
-                                            <div className="hidden md:flex items-center gap-1">
+                                            <div className="hidden md:flex items-center gap-1 px-2">
                                                 <LabelSelector 
                                                     selectedLabels={currentNote.labels || []}
                                                     allLabels={allLabels}
@@ -680,8 +672,8 @@ export default function Dashboard() {
                                                     value={currentNote.folderId || "none"} 
                                                     onValueChange={handleMoveFolder}
                                                 >
-                                                    <SelectTrigger className="w-[130px] h-8 text-xs ml-2 border-dashed bg-transparent">
-                                                        <div className="flex items-center gap-1 truncate">
+                                                    <SelectTrigger className="w-[120px] h-8 text-xs ml-1 border-none bg-transparent hover:bg-secondary rounded-full">
+                                                        <div className="flex items-center gap-1 truncate text-muted-foreground">
                                                             <Folder size={12} />
                                                             <SelectValue placeholder="Folder" />
                                                         </div>
@@ -693,39 +685,32 @@ export default function Dashboard() {
                                                         ))}
                                                     </SelectContent>
                                                 </Select>
-
-                                                <Separator orientation="vertical" className="h-6 mx-2" />
                                             </div>
+
+                                            <Separator orientation="vertical" className="h-4" />
 
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <Button variant="ghost" size="icon" onClick={(e) => togglePin(e)} className="h-8 w-8">
-                                                        <Pin size={18} className={cn(currentNote.isPinned ? "fill-primary text-primary" : "text-muted-foreground")} />
+                                                    <Button variant="ghost" size="icon" onClick={(e) => togglePin(e)} className="h-8 w-8 rounded-full">
+                                                        <Pin size={16} className={cn(currentNote.isPinned ? "fill-primary text-primary" : "text-muted-foreground")} />
                                                     </Button>
                                                 </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>{currentNote.isPinned ? "Unpin Note" : "Pin Note"}</p>
-                                                </TooltipContent>
+                                                <TooltipContent>Pin Note</TooltipContent>
                                             </Tooltip>
 
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <Button variant="ghost" size="icon" onClick={(e) => toggleArchive(e)} className="h-8 w-8">
-                                                        {currentNote.isArchived ? 
-                                                            <ArchiveRestore size={18} className="text-muted-foreground" /> : 
-                                                            <Archive size={18} className="text-muted-foreground" />
-                                                        }
+                                                    <Button variant="ghost" size="icon" onClick={(e) => toggleArchive(e)} className="h-8 w-8 rounded-full">
+                                                        <Archive size={16} className={cn(currentNote.isArchived ? "text-primary" : "text-muted-foreground")} />
                                                     </Button>
                                                 </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>{currentNote.isArchived ? "Restore from Archive" : "Archive Note"}</p>
-                                                </TooltipContent>
+                                                <TooltipContent>Archive</TooltipContent>
                                             </Tooltip>
 
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8">
-                                                        <MoreVertical size={18} className="text-muted-foreground" />
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full">
+                                                        <MoreVertical size={16} className="text-muted-foreground" />
                                                     </Button>
                                                 </DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
@@ -735,30 +720,29 @@ export default function Dashboard() {
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
 
-                                            <div className="ml-2 flex items-center">
-                                                {lastSaved && (
-                                                    <span className="text-[10px] text-muted-foreground mr-2 hidden sm:inline-block">
-                                                        Saved
-                                                    </span>
-                                                )}
-                                                <Button size="sm" onClick={() => handleSave()} disabled={isSaving} className="h-8 px-3">
-                                                    {isSaving ? <span className="animate-pulse">Saving...</span> : <Check size={16} />}
-                                                </Button>
-                                            </div>
+                                            <Button 
+                                                size="icon" 
+                                                variant="default"
+                                                onClick={() => handleSave()} 
+                                                disabled={isSaving} 
+                                                className="h-8 w-8 rounded-full ml-1"
+                                            >
+                                                {isSaving ? <span className="w-2 h-2 bg-background rounded-full animate-pulse" /> : <Check size={14} />}
+                                            </Button>
                                         </>
                                     )}
                                 </div>
                             </div>
                             
-                            <div className="flex-1 overflow-hidden relative">
+                            <div className="flex-1 overflow-hidden relative max-w-4xl mx-auto w-full">
                                 {currentView === 'trash' ? (
-                                    <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center h-full">
-                                        <Trash2 size={48} className="mb-4 opacity-20" />
-                                        <p className="font-medium">This note is in the recycle bin.</p>
-                                        <p className="text-sm">Restore it to continue editing.</p>
+                                    <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-50">
+                                        <Trash2 size={64} className="mb-4" />
+                                        <p>Note is in Recycle Bin</p>
                                     </div>
                                 ) : (
                                     <NoteEditor 
+                                        key={selectedNoteId} 
                                         content={editorContent} 
                                         onChange={setEditorContent} 
                                     />
@@ -767,17 +751,17 @@ export default function Dashboard() {
                         </>
                         </TooltipProvider>
                     ) : (
-                        <div className="flex-1 flex items-center justify-center text-muted-foreground flex-col gap-6 bg-muted/10">
-                            <div className="w-24 h-24 bg-muted rounded-2xl flex items-center justify-center shadow-inner">
-                                <FileText size={48} className="opacity-20" />
-                            </div>
-                            <div className="text-center px-4">
-                                <h3 className="font-bold text-xl text-foreground mb-2">Select a note to view</h3>
-                                <p className="text-sm max-w-xs mx-auto text-muted-foreground">
-                                    Choose a note from the list, or create a new one to start writing your thoughts securely.
+                        <div className="flex-1 flex items-center justify-center bg-background">
+                            <div className="text-center p-8 max-w-md">
+                                <div className="w-20 h-20 bg-secondary rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner">
+                                    <FileText size={32} className="text-muted-foreground/50" />
+                                </div>
+                                <h3 className="font-bold text-2xl text-primary mb-2 tracking-tight">Select a Note</h3>
+                                <p className="text-muted-foreground mb-8 leading-relaxed">
+                                    Select an entry from the sidebar to view details, or create a new note to capture your ideas.
                                 </p>
-                                <Button onClick={handleCreateNote} className="mt-6">
-                                    Create New Note
+                                <Button onClick={handleCreateNote} size="lg" className="rounded-full px-8 shadow-lg hover:shadow-xl transition-all">
+                                    Create New Entry
                                 </Button>
                             </div>
                         </div>
@@ -790,7 +774,7 @@ export default function Dashboard() {
         <Dialog open={isNewFolderOpen} onOpenChange={setIsNewFolderOpen}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Create New Folder</DialogTitle>
+                    <DialogTitle>New Folder</DialogTitle>
                 </DialogHeader>
                 <div className="py-4">
                     <Input 
@@ -798,11 +782,12 @@ export default function Dashboard() {
                         value={newFolderName}
                         onChange={(e) => setNewFolderName(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                        className="bg-secondary/50"
                     />
                 </div>
                 <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsNewFolderOpen(false)}>Cancel</Button>
-                    <Button onClick={handleCreateFolder}>Create</Button>
+                    <Button variant="ghost" onClick={() => setIsNewFolderOpen(false)}>Cancel</Button>
+                    <Button onClick={handleCreateFolder}>Create Folder</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

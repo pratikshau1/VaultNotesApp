@@ -1,7 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/context/AuthContext';
 import { 
   Plus, 
@@ -14,11 +13,13 @@ import {
   Upload,
   Hash,
   Archive,
-  Menu
+  Menu,
+  ChevronRight,
+  Settings
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { useState } from 'react';
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 type ViewType = 'all' | 'favorites' | 'archive' | 'trash' | 'files';
 
@@ -62,133 +63,165 @@ export function SidebarContent({
         setSelectedLabelFilter(null);
     };
 
+    const NavItem = ({ 
+        icon: Icon, 
+        label, 
+        active, 
+        onClick, 
+        count 
+    }: { 
+        icon: any, 
+        label: string, 
+        active: boolean, 
+        onClick: () => void,
+        count?: number 
+    }) => (
+        <button
+            onClick={onClick}
+            className={cn(
+                "w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 group",
+                active 
+                    ? "bg-primary text-primary-foreground shadow-sm" 
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+            )}
+        >
+            <div className="flex items-center gap-3">
+                <Icon size={18} className={cn("transition-colors", active ? "text-primary-foreground" : "text-muted-foreground group-hover:text-foreground")} />
+                <span>{label}</span>
+            </div>
+            {count !== undefined && (
+                <span className={cn("text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                    {count}
+                </span>
+            )}
+        </button>
+    );
+
     return (
-        <div className="flex flex-col h-full bg-muted/10">
-            <div className="p-4 border-b flex items-center justify-between h-16">
-                <div className="font-bold text-lg flex items-center gap-2">
-                    <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shadow-sm">
-                        <span className="text-primary-foreground text-sm font-bold">V</span>
+        <div className="flex flex-col h-full bg-card text-card-foreground">
+            {/* Header */}
+            <div className="p-6 pb-4">
+                <div className="flex items-center gap-3 mb-6">
+                    <div className="w-8 h-8 bg-primary text-primary-foreground flex items-center justify-center rounded-md font-serif font-bold text-lg">
+                        V
                     </div>
-                    <span className="tracking-tight">VaultNotes</span>
+                    <div>
+                        <h1 className="font-bold text-lg leading-none tracking-tight">VaultNotes</h1>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">Premium Workspace</p>
+                    </div>
                 </div>
-            </div>
-            
-            <div className="p-4 space-y-2">
-                <Button onClick={handleCreateNote} className="w-full justify-start gap-2 shadow-sm bg-primary text-primary-foreground hover:bg-primary/90">
-                    <Plus size={16} /> New Note
-                </Button>
-                <Button onClick={onFileUploadClick} variant="outline" className="w-full justify-start gap-2 bg-background">
-                    <Upload size={16} /> Upload File
+                
+                <Button onClick={handleCreateNote} className="w-full justify-center gap-2 shadow-md hover:shadow-lg transition-all bg-primary text-primary-foreground h-10 rounded-md">
+                    <Plus size={16} /> New Entry
                 </Button>
             </div>
 
-            <ScrollArea className="flex-1 px-3">
-                <div className="space-y-1 py-2">
-                    <Button 
-                        variant={currentView === 'all' && !selectedLabelFilter && !selectedFolderId ? "secondary" : "ghost"} 
-                        className={cn("w-full justify-start gap-3 font-medium", currentView === 'all' && !selectedLabelFilter && !selectedFolderId && "bg-secondary")}
-                        onClick={() => setView('all')}
-                    >
-                        <Inbox size={18} className="text-muted-foreground" /> All Notes
-                    </Button>
-                    <Button 
-                        variant={currentView === 'files' ? "secondary" : "ghost"} 
-                        className={cn("w-full justify-start gap-3 font-medium", currentView === 'files' && "bg-secondary")}
-                        onClick={() => setView('files')}
-                    >
-                        <FileIcon size={18} className="text-muted-foreground" /> File Vault
-                    </Button>
-                    <Button 
-                        variant={currentView === 'favorites' ? "secondary" : "ghost"} 
-                        className={cn("w-full justify-start gap-3 font-medium", currentView === 'favorites' && "bg-secondary")}
-                        onClick={() => setView('favorites')}
-                    >
-                        <Star size={18} className="text-muted-foreground" /> Favorites
-                    </Button>
-                    <Button 
-                        variant={currentView === 'archive' ? "secondary" : "ghost"} 
-                        className={cn("w-full justify-start gap-3 font-medium", currentView === 'archive' && "bg-secondary")}
-                        onClick={() => setView('archive')}
-                    >
-                        <Archive size={18} className="text-muted-foreground" /> Archive
-                    </Button>
-                    <Button 
-                        variant={currentView === 'trash' ? "secondary" : "ghost"} 
-                        className={cn("w-full justify-start gap-3 font-medium", currentView === 'trash' && "bg-secondary")}
-                        onClick={() => setView('trash')}
-                    >
-                        <Trash2 size={18} className="text-muted-foreground" /> Recycle Bin
-                    </Button>
+            <ScrollArea className="flex-1 px-4">
+                <div className="space-y-1 mb-8">
+                    <p className="px-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Library</p>
+                    <NavItem 
+                        icon={Inbox} 
+                        label="All Notes" 
+                        active={currentView === 'all' && !selectedLabelFilter && !selectedFolderId} 
+                        onClick={() => setView('all')} 
+                    />
+                    <NavItem 
+                        icon={Star} 
+                        label="Favorites" 
+                        active={currentView === 'favorites'} 
+                        onClick={() => setView('favorites')} 
+                    />
+                    <NavItem 
+                        icon={FileIcon} 
+                        label="File Vault" 
+                        active={currentView === 'files'} 
+                        onClick={() => setView('files')} 
+                    />
                 </div>
 
-                <Separator className="my-4 opacity-50" />
-
-                <div className="mb-6">
-                    <div className="flex items-center justify-between mb-2 px-2">
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Folders</h3>
-                        <Button variant="ghost" size="icon" className="h-5 w-5 hover:bg-muted" onClick={handleCreateFolder}>
+                <div className="space-y-1 mb-8">
+                    <div className="flex items-center justify-between px-3 mb-2 group">
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Projects</p>
+                        <button onClick={handleCreateFolder} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary">
                             <Plus size={12} />
-                        </Button>
+                        </button>
                     </div>
-                    <div className="space-y-0.5">
-                        {folders.map(folder => (
-                            <div key={folder.id} className="group flex items-center relative">
-                                <Button
-                                    variant={selectedFolderId === folder.id ? "secondary" : "ghost"}
-                                    className={cn("w-full justify-start gap-2 font-normal h-9 px-2", selectedFolderId === folder.id && "bg-secondary")}
-                                    onClick={() => { setSelectedFolderId(folder.id); setCurrentView('all'); setSelectedLabelFilter(null); }}
-                                >
-                                    <Folder size={14} className={cn("text-muted-foreground", selectedFolderId === folder.id && "text-primary fill-primary/20")} /> 
-                                    <span className="truncate">{folder.name}</span>
-                                </Button>
-                                <Button 
-                                    variant="ghost" 
-                                    size="icon" 
-                                    className="h-6 w-6 absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive"
-                                    onClick={(e) => handleDeleteFolder(folder.id, e)}
-                                >
-                                    <Trash2 size={12} />
-                                </Button>
-                            </div>
-                        ))}
-                        {folders.length === 0 && <p className="text-xs text-muted-foreground px-2 py-1 italic">No folders yet</p>}
-                    </div>
+                    {folders.map(folder => (
+                        <div key={folder.id} className="group relative">
+                            <NavItem 
+                                icon={Folder} 
+                                label={folder.name} 
+                                active={selectedFolderId === folder.id} 
+                                onClick={() => { setSelectedFolderId(folder.id); setCurrentView('all'); setSelectedLabelFilter(null); }} 
+                            />
+                             <button 
+                                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all p-1"
+                                onClick={(e) => handleDeleteFolder(folder.id, e)}
+                            >
+                                <Trash2 size={12} />
+                            </button>
+                        </div>
+                    ))}
+                    {folders.length === 0 && (
+                        <div className="px-3 py-2 text-xs text-muted-foreground/50 italic">No folders created</div>
+                    )}
                 </div>
 
                 {allLabels.length > 0 && (
-                    <div className="mb-6">
-                        <h3 className="text-xs font-semibold text-muted-foreground px-2 mb-2 uppercase tracking-wider">Labels</h3>
-                        <div className="space-y-0.5">
+                    <div className="space-y-1 mb-8">
+                        <p className="px-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Tags</p>
+                        <div className="flex flex-wrap gap-1 px-3">
                             {allLabels.map(label => (
-                                <Button
+                                <button
                                     key={label}
-                                    variant={selectedLabelFilter === label ? "secondary" : "ghost"}
-                                    className={cn("w-full justify-start gap-2 font-normal h-8 px-2", selectedLabelFilter === label && "bg-secondary")}
                                     onClick={() => { setSelectedLabelFilter(label); setCurrentView('all'); setSelectedFolderId(null); }}
+                                    className={cn(
+                                        "text-xs px-2 py-1 rounded-full border transition-colors",
+                                        selectedLabelFilter === label 
+                                            ? "bg-primary text-primary-foreground border-primary" 
+                                            : "bg-background text-muted-foreground border-border hover:border-primary/50"
+                                    )}
                                 >
-                                    <Hash size={13} className="text-muted-foreground" /> {label}
-                                </Button>
+                                    #{label}
+                                </button>
                             ))}
                         </div>
                     </div>
                 )}
+                
+                <div className="space-y-1">
+                     <p className="px-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">System</p>
+                     <NavItem 
+                        icon={Archive} 
+                        label="Archive" 
+                        active={currentView === 'archive'} 
+                        onClick={() => setView('archive')} 
+                    />
+                    <NavItem 
+                        icon={Trash2} 
+                        label="Recycle Bin" 
+                        active={currentView === 'trash'} 
+                        onClick={() => setView('trash')} 
+                    />
+                </div>
             </ScrollArea>
 
+            {/* User Profile Footer */}
             <div className="p-4 border-t bg-background/50">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center text-xs font-bold text-primary-foreground shadow-sm">
-                        {user?.username.substring(0,2).toUpperCase()}
+                <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer group">
+                    <Avatar className="h-9 w-9 border-2 border-background shadow-sm">
+                        <AvatarFallback className="bg-primary text-primary-foreground font-bold">
+                            {user?.username.substring(0,2).toUpperCase()}
+                        </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate text-foreground">{user?.username}</p>
+                        <p className="text-xs text-muted-foreground truncate">Pro Plan</p>
                     </div>
-                    <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-medium truncate">{user?.username}</p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Online
-                        </p>
-                    </div>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={logout}>
+                        <LogOut size={16} />
+                    </Button>
                 </div>
-                <Button variant="outline" size="sm" className="w-full gap-2 hover:bg-destructive/5 hover:text-destructive hover:border-destructive/20" onClick={logout}>
-                    <LogOut size={14} /> Lock Vault
-                </Button>
             </div>
         </div>
     );
@@ -198,18 +231,18 @@ export default function Sidebar(props: SidebarProps) {
     return (
         <>
             {/* Desktop Sidebar */}
-            <aside className={cn("hidden md:flex w-64 border-r flex-col bg-card", props.className)}>
+            <aside className={cn("hidden md:flex w-[280px] border-r flex-col bg-card h-screen sticky top-0", props.className)}>
                 <SidebarContent {...props} />
             </aside>
 
             {/* Mobile Sidebar */}
             <Sheet>
                 <SheetTrigger asChild>
-                    <Button variant="ghost" size="icon" className="md:hidden absolute top-3 left-4 z-50">
-                        <Menu size={24} />
+                    <Button variant="ghost" size="icon" className="md:hidden absolute top-4 left-4 z-50 bg-background/80 backdrop-blur border shadow-sm">
+                        <Menu size={20} />
                     </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="p-0 w-72">
+                <SheetContent side="left" className="p-0 w-[280px]">
                     <SidebarContent {...props} />
                 </SheetContent>
             </Sheet>
