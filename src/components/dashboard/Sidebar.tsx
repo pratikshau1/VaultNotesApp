@@ -1,21 +1,16 @@
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/context/AuthContext';
-import { 
-  Plus, 
-  LogOut, 
-  Trash2, 
+import {
+  Plus,
+  LogOut,
+  Trash2,
   Star,
   Inbox,
   Folder,
   File as FileIcon,
-  Upload,
-  Hash,
   Archive,
-  Menu,
-  ChevronRight,
-  Settings
+  Menu
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -36,7 +31,7 @@ interface SidebarProps {
   handleCreateNote: () => void;
   handleCreateFolder: () => void;
   handleDeleteFolder: (id: string, e: React.MouseEvent) => void;
-  onFileUploadClick: () => void;
+  onFileUploadClick?: () => void;
   className?: string;
 }
 
@@ -52,8 +47,7 @@ export function SidebarContent({
     setSelectedLabelFilter,
     handleCreateNote,
     handleCreateFolder,
-    handleDeleteFolder,
-    onFileUploadClick
+    handleDeleteFolder
 }: SidebarProps) {
     const { logout } = useAuth();
 

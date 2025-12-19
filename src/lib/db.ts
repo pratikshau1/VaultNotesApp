@@ -5,7 +5,13 @@ interface VaultDB extends DBSchema {
     key: string; // username
     value: {
       username: string;
-      salt: string;
+      passwordHash: string;
+      passwordSalt: string;
+      encryptionSalt: string;
+      encryptedRecoveryData: string;
+      firebaseUid?: string;
+      failedAttempts?: number;
+      lockedUntil?: number;
       createdAt: number;
     };
   };
@@ -50,7 +56,7 @@ interface VaultDB extends DBSchema {
 }
 
 const DB_NAME = 'VaultNotesDB';
-const DB_VERSION = 4; // Bumped for 'files' store
+const DB_VERSION = 5;
 
 export const initDB = async () => {
   return openDB<VaultDB>(DB_NAME, DB_VERSION, {
@@ -80,6 +86,28 @@ export const db = {
   async createUser(user: any) {
     const db = await initDB();
     return db.put('users', user);
+  },
+  async updateUser(username: string, updates: any) {
+    const db = await initDB();
+    const user = await db.get('users', username);
+    if (user) {
+      const updatedUser = { ...user, ...updates };
+      return db.put('users', updatedUser);
+    }
+    return null;
+  },
+  async incrementFailedAttempts(username: string) {
+    const db = await initDB();
+    const user = await db.get('users', username);
+    if (user) {
+      const failedAttempts = (user.failedAttempts || 0) + 1;
+      const lockedUntil = failedAttempts >= 5 ? Date.now() + 15 * 60 * 1000 : undefined;
+      return this.updateUser(username, { failedAttempts, lockedUntil });
+    }
+    return null;
+  },
+  async resetFailedAttempts(username: string) {
+    return this.updateUser(username, { failedAttempts: 0, lockedUntil: undefined });
   },
   async saveNote(note: any) {
     const db = await initDB();

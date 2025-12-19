@@ -5,19 +5,16 @@ import { encryptData, decryptData } from '@/lib/crypto';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
-import { 
-  FileText, 
-  Search, 
-  Trash2, 
-  Pin, 
-  Archive, 
-  ArchiveRestore, 
+import {
+  FileText,
+  Search,
+  Trash2,
+  Pin,
+  Archive,
   RotateCcw,
   Folder,
   MoreVertical,
-  Check,
-  Clock,
-  Calendar
+  Check
 } from 'lucide-react';
 import NoteEditor from './NoteEditor';
 import Sidebar from './Sidebar';
@@ -73,7 +70,6 @@ export default function Dashboard() {
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [lastSaved, setLastSaved] = useState<number | null>(null);
 
   // Modals
   const [isNewFolderOpen, setIsNewFolderOpen] = useState(false);
@@ -239,7 +235,6 @@ export default function Dashboard() {
         
         setNotes(prev => prev.map(n => n.id === selectedNoteId ? updatedNote : n));
         await saveNoteToDb(updatedNote);
-        setLastSaved(Date.now());
         if (!silent) toast.success("Saved");
     }
     if (!silent) setIsSaving(false);
