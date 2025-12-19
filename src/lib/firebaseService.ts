@@ -11,7 +11,8 @@ import {
   where,
   orderBy,
   onSnapshot,
-  Timestamp
+  Timestamp,
+  deleteField
 } from 'firebase/firestore';
 
 export interface Note {
@@ -208,10 +209,25 @@ export const firebaseService = {
   async saveUserProfile(userId: string, userData: any) {
     try {
       const userRef = doc(firestore, 'users', userId);
-      await setDoc(userRef, {
-        ...userData,
+      
+      // Remove undefined values and convert undefined fields to deleteField()
+      const cleanedData: any = {
         updatedAt: serverTimestamp()
-      }, { merge: true });
+      };
+      
+      // Clean the data to remove all undefined values
+      for (const [key, value] of Object.entries(userData)) {
+        if (value === undefined) {
+          // Use deleteField() to remove undefined fields from Firestore
+          cleanedData[key] = deleteField();
+        } else if (value !== null) {
+          // Only include defined, non-null values
+          cleanedData[key] = value;
+        }
+        // Note: null values are allowed in Firestore, so we keep them
+      }
+      
+      await setDoc(userRef, cleanedData, { merge: true });
       return true;
     } catch (error) {
       console.error('Failed to save user profile to Firebase:', error);

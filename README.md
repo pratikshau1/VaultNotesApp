@@ -165,27 +165,21 @@ VaultNotesApp/
    - Enable Authentication (Email/Password)
    - Copy your Firebase config
    - Update `src/lib/firebase.ts` with your Firebase configuration
+   - **Important**: Add your deployment domain (e.g., `valuenotes.netlify.app`) to Firebase Console → Authentication → Settings → Authorized domains tab to avoid OAuth warnings
 
 4. **Configure Firestore Security Rules**
-   ```javascript
-   rules_version = '2';
-   service cloud.firestore {
-     match /databases/{database}/documents {
-       // Users can only access their own data
-       match /users/{userId} {
-         allow read, write: if request.auth != null && request.auth.uid == userId;
-         
-         match /notes/{noteId} {
-           allow read, write: if request.auth != null && request.auth.uid == userId;
-         }
-         
-         match /folders/{folderId} {
-           allow read, write: if request.auth != null && request.auth.uid == userId;
-         }
-       }
-     }
-   }
-   ```
+   - Copy the contents of `firestore.rules` file
+   - Go to Firebase Console → Firestore Database → Rules
+   - Paste the rules and click "Publish"
+   - The rules allow:
+     - Users to read/write their own data only
+     - Unauthenticated reads for username lookups (account recovery)
+     - Proper access control for notes, folders, and user profiles
+
+5. **Configure Firebase Storage Rules** (if using Firebase Storage)
+   - Copy the contents of `firebase-storage.rules` file
+   - Go to Firebase Console → Storage → Rules
+   - Paste the rules and click "Publish"
 
 5. **Run the development server**
    ```bash

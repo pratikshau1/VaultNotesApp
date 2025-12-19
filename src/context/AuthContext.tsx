@@ -138,11 +138,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const key = deriveEncryptionKey(passphrase, userProfile.encryptionSalt);
       
       // Reset failed attempts on successful login
-      await firebaseService.saveUserProfile(userId, {
-        ...userProfile,
+      // Only include fields that should be updated
+      const updateData: any = {
+        username: userProfile.username,
+        encryptionSalt: userProfile.encryptionSalt,
+        encryptedRecoveryData: userProfile.encryptedRecoveryData,
         failedAttempts: 0,
-        lockedUntil: undefined
-      });
+        createdAt: userProfile.createdAt,
+        lockedUntil: undefined // This will be converted to deleteField() in saveUserProfile
+      };
+      
+      await firebaseService.saveUserProfile(userId, updateData);
 
       setEncryptionKey(key);
       setUser(userProfile);
