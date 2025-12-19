@@ -232,11 +232,16 @@ export default function Sidebar(props: SidebarProps) {
             {/* Mobile Sidebar */}
             <Sheet>
                 <SheetTrigger asChild>
-                    <Button variant="ghost" size="icon" className="md:hidden absolute top-4 left-4 z-50 bg-background/80 backdrop-blur border shadow-sm">
+                    <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="md:hidden fixed top-4 left-4 z-50 bg-background/95 backdrop-blur-sm border shadow-lg hover:bg-background h-10 w-10"
+                        aria-label="Open menu"
+                    >
                         <Menu size={20} />
                     </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="p-0 w-[280px]">
+                <SheetContent side="left" className="p-0 w-[280px] sm:w-[320px]">
                     <SidebarContent {...props} />
                 </SheetContent>
             </Sheet>

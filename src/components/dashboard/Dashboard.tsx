@@ -557,7 +557,7 @@ export default function Dashboard() {
   const currentNote = notes.find(n => n.id === selectedNoteId);
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden font-sans">
+    <div className="flex h-screen bg-background overflow-hidden font-sans relative">
         <input 
             type="file" 
             ref={fileInputRef} 
@@ -594,8 +594,8 @@ export default function Dashboard() {
             <>
                 {/* Note List - Redesigned as a "Project List" */}
                 <div className={cn(
-                    "w-[350px] border-r flex flex-col bg-background/50 backdrop-blur-sm transition-all duration-300", 
-                    selectedNoteId ? "hidden lg:flex" : "flex w-full"
+                    "w-full lg:w-[350px] border-r flex flex-col bg-background/50 backdrop-blur-sm transition-all duration-300", 
+                    selectedNoteId ? "hidden lg:flex" : "flex"
                 )}>
                     {/* Header */}
                     <div className="p-6 pb-2 border-b border-border/50">
@@ -695,7 +695,7 @@ export default function Dashboard() {
 
                 {/* Editor Area - Clean & Expansive */}
                 <main className={cn(
-                    "flex-1 flex flex-col min-w-0 bg-background h-full transition-all duration-300 relative", 
+                    "flex-1 flex flex-col min-w-0 bg-background h-full transition-all duration-300 relative w-full", 
                     !selectedNoteId ? "hidden lg:flex" : "flex"
                 )}>
                     {selectedNoteId && currentNote ? (
@@ -822,13 +822,13 @@ export default function Dashboard() {
                         </>
                         </TooltipProvider>
                     ) : (
-                        <div className="flex-1 flex items-center justify-center bg-background">
-                            <div className="text-center p-8 max-w-md">
+                        <div className="flex-1 flex items-center justify-center bg-background w-full min-h-[calc(100vh-80px)]">
+                            <div className="text-center p-8 max-w-md mx-auto w-full">
                                 <div className="w-20 h-20 bg-secondary rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner">
                                     <FileText size={32} className="text-muted-foreground/50" />
                                 </div>
                                 <h3 className="font-bold text-2xl text-primary mb-2 tracking-tight">Select a Note</h3>
-                                <p className="text-muted-foreground mb-8 leading-relaxed">
+                                <p className="text-muted-foreground mb-8 leading-relaxed px-4">
                                     Select an entry from the sidebar to view details, or create a new note to capture your ideas.
                                 </p>
                                 <Button onClick={handleCreateNote} size="lg" className="rounded-full px-8 shadow-lg hover:shadow-xl transition-all">
