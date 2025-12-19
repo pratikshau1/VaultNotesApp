@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
 import { encryptData, decryptData } from '@/lib/crypto';
+import { firebaseService, Note, Folder as FolderType } from '@/lib/firebaseService';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
@@ -52,7 +53,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 type ViewType = 'all' | 'favorites' | 'archive' | 'trash' | 'files';
 
 export default function Dashboard() {
-  const { user, encryptionKey } = useAuth();
+  const { user, encryptionKey, firebaseUser } = useAuth();
   
   // Data State
   const [notes, setNotes] = useState<any[]>([]);
@@ -78,10 +79,60 @@ export default function Dashboard() {
 
   // Auto-save timer ref
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    loadData();
-  }, [encryptionKey]);
+    if (firebaseUser && encryptionKey) {
+      loadData();
+      
+      // Setup realtime listeners
+      if (firebaseUser) {
+        // Subscribe to notes changes
+        const unsubscribeNotes = firebaseService.subscribeToNotes(firebaseUser.uid, (firebaseNotes) => {
+          if (!encryptionKey) return;
+          
+          const decryptedNotes = firebaseNotes.map(note => {
+            try {
+              const title = decryptData(note.encryptedTitle, encryptionKey);
+              const content = decryptData(note.encryptedContent, encryptionKey);
+              return {
+                ...note,
+                title: title || "Untitled",
+                content: content || "",
+                isPinned: !!note.isPinned,
+                isArchived: !!note.isArchived,
+                isTrashed: !!note.isTrashed,
+                labels: note.labels || []
+              };
+            } catch (e) {
+              console.error("Failed to decrypt note", note.id);
+              return { ...note, title: "Decryption Error", content: "", labels: [] };
+            }
+          });
+          
+          decryptedNotes.sort((a, b) => b.updatedAt - a.updatedAt);
+          setNotes(decryptedNotes);
+        });
+
+        // Subscribe to folders changes
+        const unsubscribeFolders = firebaseService.subscribeToFolders(firebaseUser.uid, (firebaseFolders) => {
+          setFolders(firebaseFolders.sort((a, b) => a.name.localeCompare(b.name)));
+        });
+
+        unsubscribeRef.current = () => {
+          unsubscribeNotes();
+          unsubscribeFolders();
+        };
+      }
+    }
+    
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
+  }, [firebaseUser, encryptionKey]);
 
   // Sync editor with selected note
   useEffect(() => {
@@ -115,45 +166,48 @@ export default function Dashboard() {
   }, [editorTitle, editorContent]);
 
   const loadData = async () => {
-    if (!encryptionKey) return;
+    if (!encryptionKey || !firebaseUser) return;
 
     try {
-      const loadedFolders = await db.getFolders();
+      // Load folders from Firebase
+      const loadedFolders = await firebaseService.getAllFolders(firebaseUser.uid);
       setFolders(loadedFolders.sort((a, b) => a.name.localeCompare(b.name)));
 
-      const encryptedNotes = await db.getNotes();
+      // Load notes from Firebase
+      const encryptedNotes = await firebaseService.getAllNotes(firebaseUser.uid);
       const decryptedNotes = encryptedNotes.map(note => {
         try {
-            const title = decryptData(note.encryptedTitle, encryptionKey);
-            const content = decryptData(note.encryptedContent, encryptionKey);
-            return { 
-              ...note, 
-              title: title || "Untitled", 
-              content: content || "",
-              isPinned: !!note.isPinned,
-              isArchived: !!note.isArchived,
-              isTrashed: !!note.isTrashed,
-              labels: note.labels || []
-            };
+          const title = decryptData(note.encryptedTitle, encryptionKey);
+          const content = decryptData(note.encryptedContent, encryptionKey);
+          return {
+            ...note,
+            title: title || "Untitled",
+            content: content || "",
+            isPinned: !!note.isPinned,
+            isArchived: !!note.isArchived,
+            isTrashed: !!note.isTrashed,
+            labels: note.labels || []
+          };
         } catch (e) {
-            console.error("Failed to decrypt note", note.id);
-            return { ...note, title: "Decryption Error", content: "", labels: [] };
+          console.error("Failed to decrypt note", note.id);
+          return { ...note, title: "Decryption Error", content: "", labels: [] };
         }
       }).filter(n => n !== null);
       
       decryptedNotes.sort((a, b) => b.updatedAt - a.updatedAt);
       setNotes(decryptedNotes);
 
+      // Load files from IndexedDB (files stay local)
       const encryptedFiles = await db.getFiles();
       const decryptedFiles = encryptedFiles.map(file => {
         try {
-            const name = decryptData(file.encryptedName, encryptionKey);
-            return {
-                ...file,
-                name: name || "Unknown File",
-            };
+          const name = decryptData(file.encryptedName, encryptionKey);
+          return {
+            ...file,
+            name: name || "Unknown File",
+          };
         } catch (e) {
-            return { ...file, name: "Error", type: "unknown" };
+          return { ...file, name: "Error", type: "unknown" };
         }
       });
       setFiles(decryptedFiles);
@@ -193,11 +247,13 @@ export default function Dashboard() {
   };
 
   const saveNoteToDb = async (note: any) => {
+    if (!firebaseUser || !encryptionKey) return;
+    
     try {
       const encryptedTitle = encryptData(note.title, encryptionKey);
       const encryptedContent = encryptData(note.content, encryptionKey);
 
-      await db.saveNote({
+      const firebaseNote: Note = {
         id: note.id,
         encryptedTitle,
         encryptedContent,
@@ -205,12 +261,15 @@ export default function Dashboard() {
         isPinned: note.isPinned,
         isArchived: note.isArchived,
         isTrashed: note.isTrashed,
-        labels: note.labels,
+        labels: note.labels || [],
         createdAt: note.createdAt,
         updatedAt: note.updatedAt
-      });
+      };
+
+      await firebaseService.saveNote(firebaseUser.uid, firebaseNote);
     } catch (e) {
       console.error("Save failed", e);
+      toast.error("Failed to save note");
     }
   };
 
@@ -309,12 +368,17 @@ export default function Dashboard() {
   };
 
   const handlePermanentDelete = async () => {
-    if (!selectedNoteId) return;
+    if (!selectedNoteId || !firebaseUser) return;
     if(confirm("Are you sure you want to delete this note permanently? This cannot be undone.")) {
-        await db.deleteNote(selectedNoteId);
-        setNotes(notes.filter(n => n.id !== selectedNoteId));
-        setSelectedNoteId(null);
-        toast.success("Note permanently deleted");
+        try {
+          await firebaseService.deleteNote(firebaseUser.uid, selectedNoteId);
+          setNotes(notes.filter(n => n.id !== selectedNoteId));
+          setSelectedNoteId(null);
+          toast.success("Note permanently deleted");
+        } catch (e) {
+          console.error("Delete failed", e);
+          toast.error("Failed to delete note");
+        }
     }
   }
 
@@ -340,36 +404,48 @@ export default function Dashboard() {
   };
 
   const handleCreateFolder = async () => {
-    if (!newFolderName.trim()) return;
-    const newFolder = {
+    if (!newFolderName.trim() || !firebaseUser) return;
+    try {
+      const newFolder: FolderType = {
         id: uuidv4(),
         name: newFolderName,
         parentId: null,
         createdAt: Date.now()
-    };
-    await db.saveFolder(newFolder);
-    setFolders([...folders, newFolder].sort((a, b) => a.name.localeCompare(b.name)));
-    setNewFolderName("");
-    setIsNewFolderOpen(false);
-    toast.success("Folder created");
+      };
+      await firebaseService.saveFolder(firebaseUser.uid, newFolder);
+      setFolders([...folders, newFolder].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewFolderName("");
+      setIsNewFolderOpen(false);
+      toast.success("Folder created");
+    } catch (e) {
+      console.error("Failed to create folder", e);
+      toast.error("Failed to create folder");
+    }
   };
 
   const handleDeleteFolder = async (folderId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!firebaseUser) return;
+    
     if (confirm("Delete this folder? Notes inside will be unassigned.")) {
-        await db.deleteFolder(folderId);
-        setFolders(folders.filter(f => f.id !== folderId));
-        if (selectedFolderId === folderId) setSelectedFolderId(null);
-        
-        const updatedNotes = notes.map(n => n.folderId === folderId ? { ...n, folderId: null } : n);
-        setNotes(updatedNotes);
-        updatedNotes.forEach(n => {
+        try {
+          await firebaseService.deleteFolder(firebaseUser.uid, folderId);
+          setFolders(folders.filter(f => f.id !== folderId));
+          if (selectedFolderId === folderId) setSelectedFolderId(null);
+          
+          const updatedNotes = notes.map(n => n.folderId === folderId ? { ...n, folderId: null } : n);
+          setNotes(updatedNotes);
+          updatedNotes.forEach(n => {
             if (n.folderId === null && notes.find(old => old.id === n.id)?.folderId === folderId) {
-                saveNoteToDb(n);
+              saveNoteToDb(n);
             }
-        });
-        
-        toast.success("Folder deleted");
+          });
+          
+          toast.success("Folder deleted");
+        } catch (e) {
+          console.error("Failed to delete folder", e);
+          toast.error("Failed to delete folder");
+        }
     }
   };
 

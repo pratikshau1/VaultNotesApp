@@ -1,45 +1,11 @@
 import { openDB, DBSchema } from 'idb';
 
+/**
+ * IndexedDB schema for VaultNotes
+ * Only used for file storage (PDFs, images, etc.)
+ * Notes and folders are stored in Firebase Firestore
+ */
 interface VaultDB extends DBSchema {
-  users: {
-    key: string; // username
-    value: {
-      username: string;
-      passwordHash: string;
-      passwordSalt: string;
-      encryptionSalt: string;
-      encryptedRecoveryData: string;
-      firebaseUid?: string;
-      failedAttempts?: number;
-      lockedUntil?: number;
-      createdAt: number;
-    };
-  };
-  notes: {
-    key: string; // uuid
-    value: {
-      id: string;
-      folderId: string | null;
-      encryptedTitle: string;
-      encryptedContent: string;
-      isPinned: boolean;
-      isArchived: boolean;
-      isTrashed: boolean;
-      labels: string[];
-      createdAt: number;
-      updatedAt: number;
-    };
-    indexes: { 'by-folder': string };
-  };
-  folders: {
-    key: string;
-    value: {
-      id: string;
-      name: string; 
-      parentId: string | null;
-      createdAt: number;
-    };
-  };
   files: {
     key: string;
     value: {
@@ -56,21 +22,25 @@ interface VaultDB extends DBSchema {
 }
 
 const DB_NAME = 'VaultNotesDB';
-const DB_VERSION = 5;
+const DB_VERSION = 6; // Incremented version to remove notes/folders/users stores
 
 export const initDB = async () => {
   return openDB<VaultDB>(DB_NAME, DB_VERSION, {
-    upgrade(db, _oldVersion, _newVersion, _transaction) {
-      if (!db.objectStoreNames.contains('users')) {
-        db.createObjectStore('users', { keyPath: 'username' });
+    upgrade(db, oldVersion, newVersion, transaction) {
+      // Remove old stores if they exist (migration from old version)
+      if (oldVersion < 6) {
+        if (db.objectStoreNames.contains('users')) {
+          db.deleteObjectStore('users');
+        }
+        if (db.objectStoreNames.contains('notes')) {
+          db.deleteObjectStore('notes');
+        }
+        if (db.objectStoreNames.contains('folders')) {
+          db.deleteObjectStore('folders');
+        }
       }
-      if (!db.objectStoreNames.contains('notes')) {
-        const noteStore = db.createObjectStore('notes', { keyPath: 'id' });
-        noteStore.createIndex('by-folder', 'folderId');
-      }
-      if (!db.objectStoreNames.contains('folders')) {
-        db.createObjectStore('folders', { keyPath: 'id' });
-      }
+      
+      // Create files store if it doesn't exist
       if (!db.objectStoreNames.contains('files')) {
         db.createObjectStore('files', { keyPath: 'id' });
       }
@@ -78,71 +48,25 @@ export const initDB = async () => {
   });
 };
 
+/**
+ * IndexedDB operations for file storage only
+ * Files are stored locally in the browser for performance and privacy
+ */
 export const db = {
-  async getUser(username: string) {
-    const db = await initDB();
-    return db.get('users', username);
-  },
-  async createUser(user: any) {
-    const db = await initDB();
-    return db.put('users', user);
-  },
-  async updateUser(username: string, updates: any) {
-    const db = await initDB();
-    const user = await db.get('users', username);
-    if (user) {
-      const updatedUser = { ...user, ...updates };
-      return db.put('users', updatedUser);
-    }
-    return null;
-  },
-  async incrementFailedAttempts(username: string) {
-    const db = await initDB();
-    const user = await db.get('users', username);
-    if (user) {
-      const failedAttempts = (user.failedAttempts || 0) + 1;
-      const lockedUntil = failedAttempts >= 5 ? Date.now() + 15 * 60 * 1000 : undefined;
-      return this.updateUser(username, { failedAttempts, lockedUntil });
-    }
-    return null;
-  },
-  async resetFailedAttempts(username: string) {
-    return this.updateUser(username, { failedAttempts: 0, lockedUntil: undefined });
-  },
-  async saveNote(note: any) {
-    const db = await initDB();
-    return db.put('notes', note);
-  },
-  async getNotes() {
-    const db = await initDB();
-    return db.getAll('notes');
-  },
-  async deleteNote(id: string) {
-    const db = await initDB();
-    return db.delete('notes', id);
-  },
-  async saveFolder(folder: any) {
-    const db = await initDB();
-    return db.put('folders', folder);
-  },
-  async getFolders() {
-    const db = await initDB();
-    return db.getAll('folders');
-  },
-  async deleteFolder(id: string) {
-    const db = await initDB();
-    return db.delete('folders', id);
-  },
   async saveFile(file: any) {
-    const db = await initDB();
-    return db.put('files', file);
+    const dbInstance = await initDB();
+    return dbInstance.put('files', file);
   },
   async getFiles() {
-    const db = await initDB();
-    return db.getAll('files');
+    const dbInstance = await initDB();
+    return dbInstance.getAll('files');
   },
   async deleteFile(id: string) {
-    const db = await initDB();
-    return db.delete('files', id);
+    const dbInstance = await initDB();
+    return dbInstance.delete('files', id);
+  },
+  async getFile(id: string) {
+    const dbInstance = await initDB();
+    return dbInstance.get('files', id);
   }
 };
